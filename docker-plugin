@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+
+base64-decode() {
+	if [[ "$(uname)" == "Darwin" ]]; then
+		base64 -D
+	else
+		base64 -d
+	fi
+}
+
+plugin-ls() {
+  docker ps -f="name=plugin." "$@"
+}
+
+plugin-unload() {
+  for container in "$@"; do
+    docker stop "$container" &> /dev/null
+    docker rm -f "$container"
+  done
+}
+
+plugin-upgrade() {
+  declare container="$1" tag="$2"
+  if [[ "$container" == "" ]]; then
+    for container in $(plugin-ls -q); do
+      plugin-upgrade "${container:?}"
+    done
+    return
+  fi
+  local old_image new_image _plugin_args
+  old_image="$(docker inspect -f "{{.Config.Image}}" "$container")"
+  if [[ "$tag" ]]; then
+    new_image="${old_image%:*}"
+    new_image="${new_image}:$tag"
+    echo "Upgrading to new tag $new_image"
+  else
+    new_image="$old_image"
+    echo "Upgrading to latest $new_image"
+  fi
+  docker pull "$new_image" 2> /dev/null || true
+  eval "$(docker inspect "$container" | jq -r '.[].Config.Env[]' | grep _plugin_args=)"
+  _plugin_args="$(echo $_plugin_args | base64-decode)"
+  plugin-unload "$container" &> /dev/null
+  plugin-run ${_plugin_args/ $old_image/ $new_image}
+}
+
+plugin-load() {
+  local args handshake image
+  args="-d --restart=on-failure"
+  handshake=yes
+  for _ in $(seq $#); do
+    case "$1" in
+      --api)
+        args+=" -v /var/run/docker.sock:/var/run/docker.sock"
+        shift
+        ;;
+      --no-handshake)
+        handshake=no
+        shift
+        ;;
+    esac
+  done
+
+  # easiest way to get image from args is to run a container and inspect.
+  # yes easier than any arg parsing given docker run arg complexity.
+  docker run --name plugin.preload --entrypoint /bin/true $@ &> /dev/null
+  image="$(docker inspect -f "{{.Config.Image}}" plugin.preload)"
+  docker rm -f plugin.preload &> /dev/null
+  image="${image%:*}" # drop tag
+  image="${image##*/}" # drop owner
+
+  args+=" -e _handshake=$handshake --name plugin.$image $@"
+  plugin-run $args
+}
+
+plugin-run() {
+  local encoded_args="$(echo "$@" | base64)"
+  docker run -e _plugin_args="$encoded_args" "$@"
+}
+
+plugin-usage() {
+  echo
+  echo "Available commands:"
+  echo
+  echo "  docker-plugin ls [--quiet]"
+  echo "  docker-plugin load [docker run options] <image> [<command+args>]"
+  echo "  docker-plugin unload <container> [<container>...]"
+  echo "  docker-plugin upgrade [<container> [<tag>]]"
+  echo
+}
+
+main() {
+  set -eo pipefail; [[ "$TRACE" ]] && set -x
+  case "$1" in
+    ls)       shift; plugin-ls "$@";;
+    unload)   shift; plugin-unload "$@";;
+    upgrade)  shift; plugin-upgrade "$@";;
+    load)     shift; plugin-load "$@";;
+    help|"")  plugin-usage;;
+  esac
+}
+
+main "$@"

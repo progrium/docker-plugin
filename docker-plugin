@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
 
 base64-decode() {
-	if [[ "$(uname)" == "Darwin" ]]; then
-		base64 -D
-	else
-		base64 -d
-	fi
+  if [[ "$(uname)" == "Darwin" ]]; then
+    base64 -D
+  else
+    base64 -d
+  fi
+}
+
+plugin-usage() {
+  echo
+  echo "Available commands:"
+  echo
+  echo "  docker-plugin ls [--quiet]"
+  echo "  docker-plugin load [docker run options] <image> [<command+args>]"
+  echo "  docker-plugin unload <container> [<container>...]"
+  echo "  docker-plugin upgrade [<container> [<tag>]]"
+  echo
 }
 
 plugin-ls() {
@@ -76,17 +87,6 @@ plugin-load() {
 plugin-run() {
   local encoded_args="$(echo "$@" | base64)"
   docker run -e _plugin_args="$encoded_args" "$@"
-}
-
-plugin-usage() {
-  echo
-  echo "Available commands:"
-  echo
-  echo "  docker-plugin ls [--quiet]"
-  echo "  docker-plugin load [docker run options] <image> [<command+args>]"
-  echo "  docker-plugin unload <container> [<container>...]"
-  echo "  docker-plugin upgrade [<container> [<tag>]]"
-  echo
 }
 
 main() {
